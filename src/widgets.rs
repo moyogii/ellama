@@ -1,7 +1,7 @@
 use anyhow::Result;
 use eframe::{
     egui::{
-        self, collapsing_header::CollapsingState, Color32, Frame, Layout, RichText, Rounding,
+        self, collapsing_header::CollapsingState, Color32, Frame, Layout, RichText, CornerRadius,
         Stroke, Vec2,
     },
     emath::Numeric,
@@ -59,10 +59,10 @@ fn collapsing_frame<R>(
     let style = ui.style();
 
     egui::Frame {
-        inner_margin: egui::Margin::same(4.0),
-        rounding: style.visuals.menu_rounding,
+        inner_margin: egui::Margin::same(4),
+        corner_radius: style.visuals.menu_corner_radius,
         fill: style.visuals.extreme_bg_color,
-        ..egui::Frame::none()
+        ..egui::Frame::new()
     }
     .show(ui, |ui| {
         ui.with_layout(Layout::top_down_justified(egui::Align::Min), |ui| {
@@ -111,7 +111,7 @@ impl ModelPicker {
     {
         if let Some(models) = models {
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_source("model_selector_combobox")
+                egui::ComboBox::from_id_salt("model_selector_combobox")
                     .selected_text(self.selected_model())
                     .show_ui(ui, |ui| {
                         for model in models {
@@ -649,8 +649,8 @@ pub fn centerer(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
 }
 
 pub fn suggestion(ui: &mut egui::Ui, text: &str, subtext: &str) -> egui::Response {
-    let mut resp = Frame::group(ui.style())
-        .rounding(Rounding::same(6.0))
+    let resp = Frame::group(ui.style())
+        .corner_radius(CornerRadius::same(6))
         .stroke(Stroke::NONE)
         .fill(ui.style().visuals.faint_bg_color)
         .show(ui, |ui| {
@@ -666,18 +666,8 @@ pub fn suggestion(ui: &mut egui::Ui, text: &str, subtext: &str) -> egui::Respons
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
-    // for some reason egui sets `Frame::group` to not sense clicks, so we
-    // have to hack it here
-    resp.clicked = resp.hovered()
-        && ui.input(|i| {
-            i.pointer.any_click()
-                && i.pointer
-                    .interact_pos()
-                    .map(|p| resp.rect.contains(p))
-                    .unwrap_or(false)
-        });
-
-    resp
+    // Add sense using interact
+    ui.interact(resp.rect, ui.next_auto_id(), egui::Sense::click())
 }
 
 pub fn dummy(ui: &mut egui::Ui) {
@@ -712,7 +702,7 @@ fn toggle_ui(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
         let rect = rect.expand(visuals.expansion);
         let radius = 0.5 * rect.height();
         ui.painter()
-            .rect(rect, radius, visuals.bg_fill, visuals.bg_stroke);
+            .rect(rect, radius, visuals.bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
         let circle_x = cubic_ease_out((rect.left() + radius)..=(rect.right() - radius), how_on);
         let center = egui::pos2(circle_x, rect.center().y);
         ui.painter()

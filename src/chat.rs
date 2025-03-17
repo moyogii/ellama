@@ -8,7 +8,7 @@ use crate::{
 use anyhow::{Context, Result};
 use eframe::egui::{
     self, pos2, vec2, Align, Color32, Frame, Key, KeyboardShortcut, Layout, Margin, Modifiers,
-    Pos2, Rect, Rounding, Stroke, TextStyle,
+    Pos2, Rect, CornerRadius, Stroke, TextStyle, StrokeKind
 };
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use egui_modal::{Icon, Modal};
@@ -755,7 +755,7 @@ impl Chat {
                 .add(
                     egui::Button::new("➕")
                         .min_size(vec2(32.0, 32.0))
-                        .rounding(Rounding::same(f32::INFINITY)),
+                        .corner_radius(CornerRadius::same(u8::MAX)),
                 )
                 .on_hover_text_at_pointer("Pick Images")
                 .clicked()
@@ -882,8 +882,9 @@ impl Chat {
             );
             ui.painter().rect_stroke(
                 rect.shrink(radius / 2.0 + 1.2),
-                2.0,
+                2,
                 Stroke::new(2.0, Color32::DARK_GRAY),
+                StrokeKind::Inside,
             );
         }
     }
@@ -1032,10 +1033,10 @@ impl Chat {
 
         egui::CentralPanel::default()
             .frame(Frame::central_panel(&ctx.style()).inner_margin(Margin {
-                left: 16.0,
-                right: 16.0,
-                top: 0.0,
-                bottom: 3.0,
+                left: 16,
+                right: 16,
+                top: 0,
+                bottom: 3,
             }))
             .show(ctx, |ui| {
                 if self.messages.is_empty() {

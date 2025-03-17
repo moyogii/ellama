@@ -1,4 +1,5 @@
 use eframe::egui::{self, FontTweak};
+use std::sync::Arc;
 
 pub fn set_style(ctx: &egui::Context) {
     ctx.style_mut(|s| {
@@ -12,24 +13,24 @@ pub fn set_style(ctx: &egui::Context) {
     log::info!("installing custom fonts");
     fonts.font_data.insert(
         "Inter-Regular".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/Inter-Regular.ttf")),
+        Arc::new(egui::FontData::from_static(include_bytes!("../assets/Inter-Regular.ttf"))),
     );
     fonts.font_data.insert(
         "JetBrainsMono-Regular".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/JetBrainsMono-Regular.ttf")),
+        Arc::new(egui::FontData::from_static(include_bytes!("../assets/JetBrainsMono-Regular.ttf"))),
     );
     fonts.font_data.insert(
         "NotoEmoji-Regular".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf")).tweak(
+        Arc::new(egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf")).tweak(
             FontTweak {
                 scale: 0.81, // make it smaller
                 ..Default::default()
             },
-        ),
+        )),
     );
     fonts.font_data.insert(
         "emoji-icon-font".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/emoji-icon-font.ttf")).tweak(
+        Arc::new(egui::FontData::from_static(include_bytes!("../assets/emoji-icon-font.ttf")).tweak(
             FontTweak {
                 scale: 0.88, // make it smaller
 
@@ -38,7 +39,7 @@ pub fn set_style(ctx: &egui::Context) {
                 baseline_offset_factor: -0.11, // ...now the entire row is a bit down so shift it back
                 ..Default::default()
             },
-        ),
+        )),
     );
 
     fonts.families.insert(
