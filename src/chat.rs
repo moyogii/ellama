@@ -450,27 +450,26 @@ async fn request_completion(
     let mut is_whitespace = true;
 
     while let Some(Ok(res)) = stream.next().await {
-        if let Some(msg) = res.message {
-            if is_whitespace && msg.content.trim().is_empty() {
-                continue;
-            }
-            let content = if is_whitespace {
-                msg.content.trim_start()
-            } else {
-                &msg.content
-            };
-            is_whitespace = false;
+        let msg = res.message;
+        if is_whitespace && msg.content.trim().is_empty() {
+            continue;
+        }
+        let content = if is_whitespace {
+            msg.content.trim_start()
+        } else {
+            &msg.content
+        };
+        is_whitespace = false;
 
-            // send message to gui thread
-            handle.send((index, content.to_string()));
-            response += content;
+        // send message to gui thread
+        handle.send((index, content.to_string()));
+        response += content;
 
-            if stop_generating.load(Ordering::SeqCst) {
-                log::info!("stopping generation");
-                drop(stream);
-                stop_generating.store(false, Ordering::SeqCst);
-                break;
-            }
+        if stop_generating.load(Ordering::SeqCst) {
+            log::info!("stopping generation");
+            drop(stream);
+            stop_generating.store(false, Ordering::SeqCst);
+            break;
         }
     }
 
