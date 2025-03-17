@@ -320,7 +320,7 @@ struct ModelSettings {
     /// Controls the balance between coherence and diversity of the output. A lower value will result in more focused and coherent text. (Default: 5.0)
     pub mirostat_tau: Option<f32>,
     /// Sets the size of the context window used to generate the next token. (Default: 2048)
-    pub num_ctx: Option<u32>,
+    pub num_ctx: Option<u64>,
     /// The number of GQA groups in the transformer layer. Required for some models, for example it is 8 for llama2:70b
     pub num_gqa: Option<u32>,
     /// The number of layers to send to the GPU(s). On macOS it defaults to 1 to enable metal support, 0 to disable.
