@@ -8,7 +8,7 @@ use crate::{
 use anyhow::{Context, Result};
 use eframe::egui::{
     self, pos2, vec2, Align, Color32, Frame, Key, KeyboardShortcut, Layout, Margin, Modifiers,
-    Pos2, Rect, CornerRadius, Stroke, TextStyle, StrokeKind
+    Pos2, Rect, CornerRadius, Stroke, TextStyle, StrokeKind, RichText
 };
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use egui_modal::{Icon, Modal};
@@ -26,7 +26,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::Instant,
@@ -53,10 +53,19 @@ pub struct Message {
     #[serde(skip)]
     clicked_copy: bool,
     is_error: bool,
+    is_reasoning: bool,
     #[serde(skip)]
     is_speaking: bool,
     images: Vec<PathBuf>,
     is_prepending: bool,
+    #[serde(default)]
+    reasoning_content: String,
+    #[serde(default)]
+    html_counter: Arc<AtomicUsize>,
+    #[serde(skip)]
+    start_reason_time: Instant,
+    #[serde(default)]
+    end_reason_time: f64,
 }
 
 impl Default for Message {
@@ -72,7 +81,12 @@ impl Default for Message {
             is_speaking: false,
             model_name: String::new(),
             images: Vec::new(),
+            is_reasoning: false,
             is_prepending: false,
+            reasoning_content: String::new(),
+            html_counter: Arc::new(AtomicUsize::new(0)),
+            start_reason_time: Instant::now(),
+            end_reason_time: 0.0
         }
     }
 }
@@ -182,9 +196,45 @@ impl Message {
 
         // for some reason commonmark creates empty space above it when created,
         // compensate for that
-        let is_commonmark = !self.content.is_empty() && !self.is_error && !self.is_prepending;
+        let is_commonmark = !self.content.is_empty() && !self.is_error && !self.is_prepending && !self.is_reasoning;
         if is_commonmark {
             ui.add_space(-TextStyle::Body.resolve(ui.style()).size + 4.0);
+        }
+
+        // Reasoning 
+        if !self.reasoning_content.is_empty() {
+            ui.add_space(4.0);
+            
+            let total_time = if self.is_reasoning { self.start_reason_time.elapsed().as_secs_f64() } else { self.end_reason_time };
+            let text = format!("{} for {:.1} seconds", if self.is_reasoning { "Thinking" } else { "Thought" }, total_time);
+            ui.collapsing(text, |ui| {
+                ui.vertical(|ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(200.0)
+                        .show(ui, |ui| {
+                            let counter = Arc::clone(&self.html_counter);
+                            let html_renderer = {
+                                let counter = Arc::clone(&counter);
+                                move |ui: &mut egui::Ui, html: &str| {
+                                    ui.collapsing(
+                                        RichText::new(format!("HTML Element {}", counter.load(Ordering::Relaxed)))
+                                            .color(ui.visuals().hyperlink_color)
+                                            .small(),
+                                        |ui| {
+                                            ui.label(html);
+                                        },
+                                    );
+                                    counter.fetch_add(1, Ordering::Relaxed);
+                                }
+                            };
+                            
+                            CommonMarkViewer::new()
+                                .render_html_fn(Some(&html_renderer))
+                                .max_image_width(Some(450))
+                                .show(ui, commonmark_cache, &self.reasoning_content);
+                        });
+                });
+            });
         }
 
         // message content / spinner
@@ -357,6 +407,49 @@ impl Message {
 
         action
     }
+
+    pub fn process_reasoning_content(&mut self) {
+        if self.reasoning_content.is_empty() {
+            self.start_reason_time = Instant::now();
+
+            let mut processed_content = String::new();
+            let mut current_reasoning = String::new();
+            let mut is_reasoning = false;
+            let mut content = self.content.clone();
+            
+            // Process all <think> tags
+            while !content.is_empty() {
+                if is_reasoning {
+                    if let Some(end_pos) = content.find("</think>") {
+                        let reasoning_text = &content[..end_pos];
+                        current_reasoning.push_str(reasoning_text);
+                        content = content[end_pos + 8..].to_string();
+                        
+                        self.end_reason_time = self.start_reason_time.elapsed().as_secs_f64();
+                        is_reasoning = false;
+                    } else {
+                        current_reasoning.push_str(&content);
+                        content.clear();
+                    }
+                } else {
+                    if let Some(start_pos) = content.find("<think>") {
+                        let before_reasoning = &content[..start_pos];
+                        processed_content.push_str(before_reasoning);
+                        content = content[start_pos + 7..].to_string();
+                        is_reasoning = true;
+                    } else {
+                        processed_content.push_str(&content);
+                        content.clear();
+                    }
+                }
+            }
+            
+            if !current_reasoning.is_empty() {
+                self.reasoning_content = current_reasoning.trim().to_string();
+                self.content = processed_content;
+            }
+        }
+    }
 }
 
 // <completion progress, final completion, error>
@@ -448,6 +541,10 @@ async fn request_completion(
 
     let mut response = String::new();
     let mut is_whitespace = true;
+    let mut is_reasoning = false;
+    let mut reasoning_response = String::new();
+    let mut current_reasoning_chunk = String::new();
+    let mut thinking_tag_depth = 0;
 
     while let Some(Ok(res)) = stream.next().await {
         let msg = res.message;
@@ -461,10 +558,56 @@ async fn request_completion(
         };
         is_whitespace = false;
 
-        // send message to gui thread
-        handle.send((index, content.to_string()));
-        response += content;
-
+        // Process content chunk by chunk, looking for <think> tags
+        let mut text_remaining = content.to_string();
+        
+        while !text_remaining.is_empty() {
+            if is_reasoning {
+                if let Some(end_pos) = text_remaining.find("</think>") {
+                    let reasoning_content = &text_remaining[..end_pos];
+                    current_reasoning_chunk.push_str(reasoning_content);
+                    
+                    handle.send((index, "\0REASONING_CONTENT:".to_string() + reasoning_content));
+                    
+                    text_remaining = text_remaining[end_pos + 8..].to_string();
+                    
+                    // Decrease thinking tag depth
+                    thinking_tag_depth -= 1;
+                    if thinking_tag_depth == 0 {
+                        is_reasoning = false;
+                        handle.send((index, "\0ENDREASONING".to_string()));
+                        
+                        reasoning_response.push_str(&current_reasoning_chunk);
+                        reasoning_response.push_str("\n\n");
+                        current_reasoning_chunk.clear();
+                    }
+                } else {
+                    current_reasoning_chunk.push_str(&text_remaining);
+                    handle.send((index, "\0REASONING_CONTENT:".to_string() + &text_remaining));
+                    text_remaining.clear();
+                }
+            } else {
+                if let Some(start_pos) = text_remaining.find("<think>") {
+                    let before_reasoning = &text_remaining[..start_pos];
+                    if !before_reasoning.is_empty() {
+                        response.push_str(before_reasoning);
+                        handle.send((index, before_reasoning.to_string()));
+                    }
+                    
+                    is_reasoning = true;
+                    thinking_tag_depth += 1;
+                    handle.send((index, "\0REASONING".to_string()));
+            
+                    current_reasoning_chunk.clear();
+                    text_remaining = text_remaining[start_pos + 7..].to_string();
+                } else {
+                    response.push_str(&text_remaining);
+                    handle.send((index, text_remaining.clone()));
+                    text_remaining.clear();
+                }
+            }
+        }
+        
         if stop_generating.load(Ordering::SeqCst) {
             log::info!("stopping generation");
             drop(stream);
@@ -473,10 +616,21 @@ async fn request_completion(
         }
     }
 
+    if is_reasoning {
+        handle.send((index, "\0ENDREASONING".to_string()));
+    }
+
     log::info!(
-        "completion request complete, response length: {}",
-        response.len()
+        "completion request complete, response length: {}, reasoning response length: {}",
+        response.len(),
+        reasoning_response.len()
     );
+    
+    // Send the entire reasoning response
+    if !reasoning_response.is_empty() {
+        handle.send((index, "\0REASONINGRESPONSE:".to_string() + &reasoning_response.trim()));
+    }
+    
     handle.success((index, prepend + response.trim()));
     Ok(())
 }
@@ -530,19 +684,29 @@ pub async fn export_messages(
             for msg in &messages {
                 writeln!(
                     f,
-                    "{} - {:?} ({}): {}",
+                    "{} - {:?} ({}): {} (Reasoning ({:.1} seconds)): {}",
                     msg.time.to_rfc3339(),
                     msg.role,
                     msg.model_name,
-                    msg.content
+                    msg.content,
+                    msg.end_reason_time,
+                    msg.reasoning_content
                 )?;
+
+                writeln!(f)?; // Add blank line between messages
             }
         }
-        ChatExportFormat::Json => {
-            serde_json::to_writer_pretty(&mut f, &messages)?;
-        }
-        ChatExportFormat::Ron => {
-            ron::ser::to_writer_pretty(&mut f, &messages, ron::ser::PrettyConfig::default())?;
+        ChatExportFormat::Json | ChatExportFormat::Ron => {
+            // These formats automatically handle all fields through serialization
+            match format {
+                ChatExportFormat::Json => {
+                    serde_json::to_writer_pretty(&mut f, &messages)?;
+                }
+                ChatExportFormat::Ron => {
+                    ron::ser::to_writer_pretty(&mut f, &messages, ron::ser::PrettyConfig::default())?;
+                }
+                _ => unreachable!(),
+            }
         }
     }
 
@@ -592,6 +756,12 @@ impl Chat {
         }
     }
 
+    pub fn process_all_reasoning_messages(&mut self) {
+        for message in &mut self.messages {
+            message.process_reasoning_content();
+        }
+    }
+    
     #[inline]
     pub fn id(&self) -> usize {
         self.flower.id()
@@ -808,13 +978,42 @@ impl Chat {
     pub fn poll_flower(&mut self, modal: &mut Modal) {
         self.flower
             .extract(|(idx, progress)| {
-                self.messages[idx].content += progress.as_str();
+                let message = &mut self.messages[idx];
+                match progress.as_str() {
+                    "\0REASONING" => {
+                        message.is_reasoning = true;
+                    }
+                    "\0ENDREASONING" => {
+                        message.end_reason_time = message.start_reason_time.elapsed().as_secs_f64();
+                        message.is_reasoning = false;
+                    }
+                    content if content.starts_with("\0REASONINGRESPONSE:") => {
+                        message.reasoning_content = content["\0REASONINGRESPONSE:".len()..].to_string();
+                    }
+                    content if content.starts_with("\0REASONING_CONTENT:") => {
+                        let new_content = &content["\0REASONING_CONTENT:".len()..];
+                        if !new_content.is_empty() {
+                            message.reasoning_content.push_str(new_content);
+                        }
+                    }
+                    _ => message.content += progress.as_str()
+                }
             })
             .finalize(|result| {
                 if let Ok((idx, content)) = result {
                     let message = &mut self.messages[idx];
                     message.content = content.clone();
                     message.is_generating = false;
+                    message.is_reasoning = false;
+
+                    if message.content.trim().is_empty() && !message.reasoning_content.is_empty() {
+                        message.content = message.reasoning_content.clone();
+                        message.reasoning_content.clear();
+                    }
+                    
+                    if !message.reasoning_content.is_empty() {
+                        message.reasoning_content = message.reasoning_content.trim().to_string();
+                    }
                 } else if let Err(e) = result {
                     let (idx, msg) = match e {
                         Compact::Panicked(e) => {
@@ -832,6 +1031,7 @@ impl Chat {
                         .with_icon(Icon::Error)
                         .open();
                     message.is_generating = false;
+                    message.is_reasoning = false;
                 }
             });
     }
@@ -1008,6 +1208,8 @@ impl Chat {
         #[cfg(feature = "tts")] stopped_speaking: bool,
         commonmark_cache: &mut CommonMarkCache,
     ) -> ChatAction {
+        self.process_all_reasoning_messages();
+        
         let avail = ctx.available_rect();
         let max_height = avail.height() * 0.4 + 24.0;
         let chatbox_panel_height = self.chatbox_height + 24.0;
