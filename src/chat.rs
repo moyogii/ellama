@@ -8,7 +8,7 @@ use crate::{
 use anyhow::{Context, Result};
 use eframe::egui::{
     self, pos2, vec2, Align, Color32, Frame, Key, KeyboardShortcut, Layout, Margin, Modifiers,
-    Pos2, Rect, CornerRadius, Stroke, TextStyle, StrokeKind, RichText
+    Pos2, Rect, CornerRadius, Stroke, TextStyle, StrokeKind
 };
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use egui_modal::{Icon, Modal};
@@ -26,7 +26,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::Instant,
@@ -60,8 +60,6 @@ pub struct Message {
     is_prepending: bool,
     #[serde(default)]
     reasoning_content: String,
-    #[serde(default)]
-    html_counter: Arc<AtomicUsize>,
     #[serde(skip)]
     start_reason_time: Instant,
     #[serde(default)]
@@ -84,7 +82,6 @@ impl Default for Message {
             is_reasoning: false,
             is_prepending: false,
             reasoning_content: String::new(),
-            html_counter: Arc::new(AtomicUsize::new(0)),
             start_reason_time: Instant::now(),
             end_reason_time: 0.0
         }
@@ -206,30 +203,19 @@ impl Message {
             ui.add_space(4.0);
             
             let total_time = if self.is_reasoning { self.start_reason_time.elapsed().as_secs_f64() } else { self.end_reason_time };
-            let text = format!("{} for {:.1} seconds", if self.is_reasoning { "Thinking" } else { "Thought" }, total_time);
+
+            let text = if self.is_reasoning {
+               "💭 Thinking...".to_string()
+            } else {
+                format!("💭 Thought for {:.1} seconds", total_time)
+            };
+
             ui.collapsing(text, |ui| {
                 ui.vertical(|ui| {
                     egui::ScrollArea::vertical()
                         .max_height(200.0)
                         .show(ui, |ui| {
-                            let counter = Arc::clone(&self.html_counter);
-                            let html_renderer = {
-                                let counter = Arc::clone(&counter);
-                                move |ui: &mut egui::Ui, html: &str| {
-                                    ui.collapsing(
-                                        RichText::new(format!("HTML Element {}", counter.load(Ordering::Relaxed)))
-                                            .color(ui.visuals().hyperlink_color)
-                                            .small(),
-                                        |ui| {
-                                            ui.label(html);
-                                        },
-                                    );
-                                    counter.fetch_add(1, Ordering::Relaxed);
-                                }
-                            };
-                            
                             CommonMarkViewer::new()
-                                .render_html_fn(Some(&html_renderer))
                                 .max_image_width(Some(450))
                                 .show(ui, commonmark_cache, &self.reasoning_content);
                         });
